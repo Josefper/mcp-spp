@@ -927,6 +927,38 @@ def list_entitlements(
 
 
 # ===================================================================
+# TOOL: create_entitlement
+# ===================================================================
+@mcp.tool()
+def create_entitlement(
+    name: str,
+    description: str = "",
+    appliance_url: str = "",
+) -> str:
+    """
+    Create a new entitlement (role) in Safeguard SPP.
+
+    Args:
+        name:          Name for the entitlement
+        description:   Optional description
+        appliance_url: Appliance base URL
+    """
+    base = _ensure_appliance(appliance_url)
+    token = _get_token(appliance_url)
+    body: dict[str, Any] = {"Name": name}
+    if description:
+        body["Description"] = description
+
+    with _http_client(base) as client:
+        resp = client.post(
+            f"/service/core/{SPP_API_VERSION}/Roles",
+            headers=_headers(token),
+            json=body,
+        )
+        return resp.text
+
+
+# ===================================================================
 # TOOL: add_role_member
 # ===================================================================
 @mcp.tool()
