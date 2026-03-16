@@ -48,14 +48,23 @@ mcp = FastMCP(
 _token_cache: dict[str, str] = {}
 
 
-def _http_client(appliance_url: str | None = None) -> httpx.Client:
-    """Create an httpx client with appropriate SSL settings."""
+def _http_client(
+    appliance_url: str | None = None,
+    cert_path: str | None = None,
+    key_path: str | None = None,
+) -> httpx.Client:
+    """Create an httpx client with appropriate SSL and optional cert settings."""
     base = (appliance_url or SPP_APPLIANCE_URL).rstrip("/")
-    return httpx.Client(
-        base_url=base,
-        verify=SPP_VERIFY_SSL,
-        timeout=30.0,
-    )
+    kwargs: dict[str, Any] = {
+        "base_url": base,
+        "verify": SPP_VERIFY_SSL,
+        "timeout": 30.0,
+    }
+    if cert_path and key_path:
+        kwargs["cert"] = (cert_path, key_path)
+    elif cert_path:
+        kwargs["cert"] = cert_path
+    return httpx.Client(**kwargs)
 
 
 def _ensure_appliance(appliance_url: str | None) -> str:
@@ -148,6 +157,85 @@ def authenticate(
 
         _token_cache[base] = user_token
         return json.dumps({"status": "authenticated", "appliance": base})
+
+
+# ===================================================================
+# TOOL: authenticate_certificate
+# ===================================================================
+@mcp.tool()
+def authenticate_certificate(
+    cert_path: str,
+    key_path: str = "",
+    appliance_url: str = "",
+) -> str:
+    """
+    Authenticate to Safeguard SPP using a client certificate.
+
+    Uses the RSTS OAuth2 client_credentials flow with a TLS client
+    certificate, then exchanges the STS token for a Safeguard user token.
+
+    Args:
+        cert_path:     Path to the PEM certificate file
+        key_path:      Path to the PEM private key file (if separate from cert)
+        appliance_url: Appliance base URL (defaults to SPP_APPLIANCE_URL env var)
+
+    Returns:
+        JSON with authentication status and authenticated user on success.
+    """
+    base = _ensure_appliance(appliance_url)
+
+    if not cert_path:
+        return json.dumps({"error": "cert_path is required"})
+
+    with _http_client(base, cert_path=cert_path, key_path=key_path or None) as client:
+        # Step 1 – RSTS token via client certificate
+        rsts_resp = client.post(
+            "/RSTS/oauth2/token",
+            json={
+                "grant_type": "client_credentials",
+                "scope": "rsts:sts:primaryproviderid:certificate",
+            },
+        )
+        if rsts_resp.status_code != 200:
+            return json.dumps({
+                "error": "RSTS certificate authentication failed",
+                "status": rsts_resp.status_code,
+                "detail": rsts_resp.text,
+            })
+
+        sts_token = rsts_resp.json().get("access_token")
+        if not sts_token:
+            return json.dumps({"error": "No access_token in RSTS response"})
+
+        # Step 2 – Exchange for Safeguard user token
+        login_resp = client.post(
+            f"/service/core/{SPP_API_VERSION}/Token/LoginResponse",
+            json={"StsAccessToken": sts_token},
+        )
+        if login_resp.status_code != 200:
+            return json.dumps({
+                "error": "Token exchange failed",
+                "status": login_resp.status_code,
+                "detail": login_resp.text,
+            })
+
+        user_token = login_resp.json().get("UserToken")
+        if not user_token:
+            return json.dumps({"error": "No UserToken in login response"})
+
+        _token_cache[base] = user_token
+
+        # Get authenticated user identity
+        me_resp = client.get(
+            f"/service/core/{SPP_API_VERSION}/Me",
+            headers=_headers(user_token),
+        )
+        user_info = {}
+        if me_resp.status_code == 200:
+            me = me_resp.json()
+            user_info = {"user": me.get("DisplayName"), "user_id": me.get("Id")}
+
+        return json.dumps({"status": "authenticated", "appliance": base, **user_info})
 
 
 def _get_token(appliance_url: str | None = None) -> str:
