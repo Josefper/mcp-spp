@@ -815,6 +815,53 @@ def list_entitlements(
 
 
 # ===================================================================
+# TOOL: add_role_member
+# ===================================================================
+@mcp.tool()
+def add_role_member(
+    role_id: int,
+    user_id: int,
+    appliance_url: str = "",
+) -> str:
+    """
+    Add a user to an entitlement (role) without removing existing members.
+
+    First fetches the current member list, appends the new user, then
+    updates the role. Use list_entitlements to find role IDs and
+    list_users to find user IDs.
+
+    Args:
+        role_id:       The entitlement/role ID
+        user_id:       The user ID to add
+        appliance_url: Appliance base URL
+    """
+    base = _ensure_appliance(appliance_url)
+    token = _get_token(appliance_url)
+    with _http_client(base) as client:
+        # Get current members
+        get_resp = client.get(
+            f"/service/core/{SPP_API_VERSION}/Roles/{role_id}/Members",
+            headers=_headers(token),
+        )
+        if get_resp.status_code != 200:
+            return get_resp.text
+
+        current_members = [{"Id": m["Id"]} for m in get_resp.json()]
+        if any(m["Id"] == user_id for m in current_members):
+            return json.dumps({"status": "already_member", "role_id": role_id, "user_id": user_id})
+
+        current_members.append({"Id": user_id})
+
+        # Update with full member list
+        put_resp = client.put(
+            f"/service/core/{SPP_API_VERSION}/Roles/{role_id}/Members",
+            headers=_headers(token),
+            json=current_members,
+        )
+        return put_resp.text
+
+
+# ===================================================================
 # TOOL: list_platforms
 # ===================================================================
 @mcp.tool()
