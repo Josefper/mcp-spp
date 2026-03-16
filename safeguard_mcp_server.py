@@ -927,6 +927,123 @@ def list_entitlements(
 
 
 # ===================================================================
+# TOOL: create_access_policy
+# ===================================================================
+@mcp.tool()
+def create_access_policy(
+    name: str,
+    role_id: int,
+    access_request_type: str = "Password",
+    account_ids: str = "",
+    account_group_ids: str = "",
+    asset_ids: str = "",
+    asset_group_ids: str = "",
+    priority: int = 1,
+    require_approval: bool = False,
+    default_duration_hours: int = 2,
+    max_duration_hours: int = 2,
+    change_password_after_checkin: bool = False,
+    allow_simultaneous_access: bool = True,
+    max_simultaneous_releases: int = 4,
+    appliance_url: str = "",
+) -> str:
+    """
+    Create an access request policy and assign scope items to it.
+
+    Links accounts/assets to an entitlement so members can request access.
+
+    Args:
+        name:                         Policy name
+        role_id:                      Entitlement/role ID to attach this policy to
+        access_request_type:          "Password", "Ssh", or "RemoteDesktop"
+        account_ids:                  Comma-separated account IDs to include in scope
+        account_group_ids:            Comma-separated account group IDs to include in scope
+        asset_ids:                    Comma-separated asset IDs to include in scope
+        asset_group_ids:              Comma-separated asset group IDs to include in scope
+        priority:                     Policy priority (default 1)
+        require_approval:             Whether approval is needed (default False)
+        default_duration_hours:       Default checkout duration in hours (default 2)
+        max_duration_hours:           Maximum checkout duration in hours (default 2)
+        change_password_after_checkin: Rotate password after check-in (default False)
+        allow_simultaneous_access:    Allow multiple checkouts (default True)
+        max_simultaneous_releases:    Max concurrent checkouts (default 4)
+        appliance_url:                Appliance base URL
+    """
+    base = _ensure_appliance(appliance_url)
+    token = _get_token(appliance_url)
+
+    policy_body: dict[str, Any] = {
+        "Name": name,
+        "RoleId": role_id,
+        "Priority": priority,
+        "AccessRequestProperties": {
+            "AccessRequestType": access_request_type,
+            "AllowSimultaneousAccess": allow_simultaneous_access,
+            "MaximumSimultaneousReleases": max_simultaneous_releases,
+            "ChangePasswordAfterCheckin": change_password_after_checkin,
+        },
+        "RequesterProperties": {
+            "DefaultReleaseDurationDays": 0,
+            "DefaultReleaseDurationHours": default_duration_hours,
+            "DefaultReleaseDurationMinutes": 0,
+            "MaximumReleaseDurationDays": 0,
+            "MaximumReleaseDurationHours": max_duration_hours,
+            "MaximumReleaseDurationMinutes": 0,
+        },
+        "ApproverProperties": {
+            "RequireApproval": require_approval,
+        },
+    }
+
+    with _http_client(base) as client:
+        resp = client.post(
+            f"/service/core/{SPP_API_VERSION}/AccessPolicies",
+            headers=_headers(token),
+            json=policy_body,
+        )
+        if resp.status_code != 201:
+            return resp.text
+
+        policy = resp.json()
+        policy_id = policy["Id"]
+
+        # Build scope items
+        scope_items: list[dict[str, Any]] = []
+        if account_ids:
+            for aid in account_ids.split(","):
+                scope_items.append({"Id": int(aid.strip()), "ScopeItemType": "Account"})
+        if account_group_ids:
+            for gid in account_group_ids.split(","):
+                scope_items.append({"Id": int(gid.strip()), "ScopeItemType": "AccountGroup"})
+        if asset_ids:
+            for aid in asset_ids.split(","):
+                scope_items.append({"Id": int(aid.strip()), "ScopeItemType": "Asset"})
+        if asset_group_ids:
+            for gid in asset_group_ids.split(","):
+                scope_items.append({"Id": int(gid.strip()), "ScopeItemType": "AssetGroup"})
+
+        if scope_items:
+            scope_resp = client.put(
+                f"/service/core/{SPP_API_VERSION}/AccessPolicies/{policy_id}/ScopeItems",
+                headers=_headers(token),
+                json=scope_items,
+            )
+            if scope_resp.status_code != 200:
+                return json.dumps({
+                    "policy": policy,
+                    "scope_error": scope_resp.text,
+                })
+
+        return json.dumps({
+            "status": "created",
+            "policy_id": policy_id,
+            "policy_name": name,
+            "role_id": role_id,
+            "scope_items_count": len(scope_items),
+        })
+
+
+# ===================================================================
 # TOOL: create_entitlement
 # ===================================================================
 @mcp.tool()
