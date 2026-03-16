@@ -726,6 +726,30 @@ def create_user(
 
 
 # ===================================================================
+# TOOL: delete_user
+# ===================================================================
+@mcp.tool()
+def delete_user(user_id: int, appliance_url: str = "") -> str:
+    """
+    Delete a user from Safeguard SPP.
+
+    Args:
+        user_id:       The user ID to delete
+        appliance_url: Appliance base URL
+    """
+    base = _ensure_appliance(appliance_url)
+    token = _get_token(appliance_url)
+    with _http_client(base) as client:
+        resp = client.delete(
+            f"/service/core/{SPP_API_VERSION}/Users/{user_id}",
+            headers=_headers(token),
+        )
+        if resp.status_code == 204:
+            return json.dumps({"status": "deleted", "user_id": user_id})
+        return resp.text
+
+
+# ===================================================================
 # TOOL: list_users
 # ===================================================================
 @mcp.tool()
