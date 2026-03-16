@@ -1,0 +1,368 @@
+{
+  "Id": "SophosUTM",
+  "BackEnd": "Scriptable",
+  "Meta": {
+    "Description": "Custom platform script for Sophos UTM Firewall password management via REST API",
+    "Prerequisites": "The Sophos UTM REST API must be enabled (Management > WebAdmin Settings > REST API). An API token or admin account with sufficient privileges is required as the functional account.",
+    "Notes": "The Sophos UTM REST API runs on port 4444 (HTTPS). The Address parameter should be the UTM hostname or IP. The functional account must have admin privileges to change other users' passwords. The APIPort parameter defaults to 4444.",
+    "PasswordFormat": "Sophos UTM stores passwords as MD5 crypt hashes. This script sends the new password in cleartext over the API and lets UTM handle the hashing internally."
+  },
+
+  "CheckSystem": {
+    "Parameters": [
+      { "Address": { "Type": "String", "Required": true } },
+      { "APIPort": { "Type": "String", "Required": false, "DefaultValue": "4444" } },
+      { "FuncUsername": { "Type": "String", "Required": true } },
+      { "FuncPassword": { "Type": "Secret", "Required": true } },
+      { "UseAPIToken": { "Type": "boolean", "Required": false, "DefaultValue": false } },
+      { "SkipServerCertValidation": { "Type": "boolean", "Required": false, "DefaultValue": true } }
+    ],
+    "Do": [
+      { "BaseAddress": { "Address": "https://%Address%:%APIPort%" } },
+      { "NewHttpRequest": { "ObjectName": "SystemRequest" } },
+      { "Condition": {
+          "If": "UseAPIToken",
+          "Then": {
+            "Do": [
+              { "HttpAuth": { "RequestObjectName": "SystemRequest", "Type": "Basic", "Credentials": { "Login": "token", "Password": "%FuncPassword%" } } }
+            ]
+          },
+          "Else": {
+            "Do": [
+              { "HttpAuth": { "RequestObjectName": "SystemRequest", "Type": "Basic", "Credentials": { "Login": "%FuncUsername%", "Password": "%FuncPassword%" } } }
+            ]
+          }
+        }
+      },
+      { "Request": {
+          "RequestObjectName": "SystemRequest",
+          "ResponseObjectName": "SystemResponse",
+          "Verb": "GET",
+          "Url": "/api/status/version",
+          "IgnoreServerCertAuthentication": "%{SkipServerCertValidation}%",
+          "Content": {
+            "ContentType": "application/json"
+          }
+        }
+      },
+      { "Function": {
+          "Name": "HandleHttpResponse",
+          "Parameters": [ "%{SystemResponse.StatusCode.ToString()}%", "%{SystemResponse.Content.ToString()}%", "CheckSystem" ],
+          "ResultVariable": "CheckResult"
+        }
+      },
+      { "Return": "%{CheckResult}%" }
+    ]
+  },
+
+  "CheckPassword": {
+    "Parameters": [
+      { "Address": { "Type": "String", "Required": true } },
+      { "APIPort": { "Type": "String", "Required": false, "DefaultValue": "4444" } },
+      { "AccountUserName": { "Type": "String", "Required": true } },
+      { "AccountPassword": { "Type": "Secret", "Required": true } },
+      { "SkipServerCertValidation": { "Type": "boolean", "Required": false, "DefaultValue": true } }
+    ],
+    "Do": [
+      { "BaseAddress": { "Address": "https://%Address%:%APIPort%" } },
+      { "NewHttpRequest": { "ObjectName": "CheckRequest" } },
+      { "HttpAuth": { "RequestObjectName": "CheckRequest", "Type": "Basic", "Credentials": { "Login": "%AccountUserName%", "Password": "%AccountPassword%" } } },
+      { "Request": {
+          "RequestObjectName": "CheckRequest",
+          "ResponseObjectName": "CheckResponse",
+          "Verb": "GET",
+          "Url": "/api/status/version",
+          "IgnoreServerCertAuthentication": "%{SkipServerCertValidation}%",
+          "Content": {
+            "ContentType": "application/json"
+          }
+        }
+      },
+      { "Function": {
+          "Name": "HandleHttpResponse",
+          "Parameters": [ "%{CheckResponse.StatusCode.ToString()}%", "%{CheckResponse.Content.ToString()}%", "CheckPassword" ],
+          "ResultVariable": "PasswordValid"
+        }
+      },
+      { "Return": "%{PasswordValid}%" }
+    ]
+  },
+
+  "ChangePassword": {
+    "Parameters": [
+      { "Address": { "Type": "String", "Required": true } },
+      { "APIPort": { "Type": "String", "Required": false, "DefaultValue": "4444" } },
+      { "FuncUsername": { "Type": "String", "Required": true } },
+      { "FuncPassword": { "Type": "Secret", "Required": true } },
+      { "UseAPIToken": { "Type": "boolean", "Required": false, "DefaultValue": false } },
+      { "AccountUserName": { "Type": "String", "Required": true } },
+      { "AccountPassword": { "Type": "Secret", "Required": true } },
+      { "NewPassword": { "Type": "Secret", "Required": true } },
+      { "SkipServerCertValidation": { "Type": "boolean", "Required": false, "DefaultValue": true } }
+    ],
+    "Do": [
+      { "BaseAddress": { "Address": "https://%Address%:%APIPort%" } },
+      { "NewHttpRequest": { "ObjectName": "ChangeRequest" } },
+      { "Condition": {
+          "If": "UseAPIToken",
+          "Then": {
+            "Do": [
+              { "HttpAuth": { "RequestObjectName": "ChangeRequest", "Type": "Basic", "Credentials": { "Login": "token", "Password": "%FuncPassword%" } } }
+            ]
+          },
+          "Else": {
+            "Do": [
+              { "HttpAuth": { "RequestObjectName": "ChangeRequest", "Type": "Basic", "Credentials": { "Login": "%FuncUsername%", "Password": "%FuncPassword%" } } }
+            ]
+          }
+        }
+      },
+
+      { "Status": { "Type": "Changing", "Percent": 10, "Message": { "Name": "LookingUpUser", "Parameters": [ "%AccountUserName%" ] } } },
+
+      { "Request": {
+          "RequestObjectName": "ChangeRequest",
+          "ResponseObjectName": "UsersResponse",
+          "Verb": "GET",
+          "Url": "/api/objects/aaa/user/",
+          "IgnoreServerCertAuthentication": "%{SkipServerCertValidation}%",
+          "Content": {
+            "ContentType": "application/json"
+          }
+        }
+      },
+
+      { "Condition": {
+          "If": "UsersResponse.StatusCode.ToString() != \"OK\"",
+          "Then": {
+            "Do": [
+              { "Status": { "Type": "Changing", "Percent": 50, "Message": { "Name": "PasswordCheckFailed" } } },
+              { "Return": { "Value": false } }
+            ]
+          }
+        }
+      },
+
+      { "SetItem": { "Name": "ParsedUsers", "Value": "" } },
+      { "ExtractJsonObject": { "JsonObjectName": "UsersResponse", "Name": "ParsedUsers" } },
+      { "SetItem": { "Name": "FoundUser", "Value": "false" } },
+
+      { "ForEach": {
+          "CollectionName": "ParsedUsers",
+          "ElementName": "UserObj",
+          "Body": {
+            "Do": [
+              { "Condition": {
+                  "If": "UserObj.name.Value == AccountUserName",
+                  "Then": {
+                    "Do": [
+                      { "SetItem": { "Name": "FoundUser", "Value": "true" } },
+                      { "SetItem": { "Name": "UserRef", "Value": "%{UserObj._ref.Value}%" } },
+                      { "Status": { "Type": "Changing", "Percent": 50, "Message": { "Name": "ChangingPassword", "Parameters": [ "%AccountUserName%" ] } } },
+
+                      { "SetItem": { "Name": "PasswordPayload", "Value": { "password": "%NewPassword%" } } },
+
+                      { "NewHttpRequest": { "ObjectName": "PatchRequest" } },
+                      { "Condition": {
+                          "If": "UseAPIToken",
+                          "Then": {
+                            "Do": [
+                              { "HttpAuth": { "RequestObjectName": "PatchRequest", "Type": "Basic", "Credentials": { "Login": "token", "Password": "%FuncPassword%" } } }
+                            ]
+                          },
+                          "Else": {
+                            "Do": [
+                              { "HttpAuth": { "RequestObjectName": "PatchRequest", "Type": "Basic", "Credentials": { "Login": "%FuncUsername%", "Password": "%FuncPassword%" } } }
+                            ]
+                          }
+                        }
+                      },
+                      { "Request": {
+                          "RequestObjectName": "PatchRequest",
+                          "ResponseObjectName": "PatchResponse",
+                          "Verb": "PATCH",
+                          "Url": "/api/objects/aaa/user/%{UserRef}%",
+                          "SubstitutionInUrl": true,
+                          "IgnoreServerCertAuthentication": "%{SkipServerCertValidation}%",
+                          "Content": {
+                            "ContentObjectName": "PasswordPayload",
+                            "ContentType": "application/json"
+                          }
+                        }
+                      },
+
+                      { "Switch": {
+                          "MatchValue": "%{PatchResponse.StatusCode.ToString()}%",
+                          "Cases": [
+                            { "CaseValue": "(OK)|(NoContent)",
+                              "Do": [
+                                { "Status": { "Type": "Changing", "Percent": 90, "Message": { "Name": "PasswordChanged" } } },
+                                { "Return": { "Value": true } }
+                              ]
+                            },
+                            { "CaseValue": "Forbidden",
+                              "Do": [
+                                { "Status": { "Type": "Changing", "Percent": 80, "Message": { "Name": "InsufficientPrivilegesChangePassword" } } },
+                                { "Return": { "Value": false } }
+                              ]
+                            },
+                            { "CaseValue": "Unauthorized",
+                              "Do": [
+                                { "Status": { "Type": "Changing", "Percent": 80, "Message": { "Name": "FailedToLogin" } } },
+                                { "Return": { "Value": false } }
+                              ]
+                            }
+                          ],
+                          "DefaultCase": {
+                            "Do": [
+                              { "Status": { "Type": "Changing", "Percent": 80, "Message": { "Name": "PasswordChangeFailed" } } },
+                              { "Return": { "Value": false } }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+
+      { "Condition": {
+          "If": "FoundUser.Equals(\"false\")",
+          "Then": {
+            "Do": [
+              { "Status": { "Type": "Changing", "Percent": 80, "Message": { "Name": "AccountNotFound", "Parameters": [ "%AccountUserName%" ] } } },
+              { "Throw": { "Value": "Account %AccountUserName% not found on Sophos UTM" } }
+            ]
+          }
+        }
+      }
+    ]
+  },
+
+  "DiscoverAccounts": {
+    "Parameters": [
+      { "Address": { "Type": "String", "Required": true } },
+      { "APIPort": { "Type": "String", "Required": false, "DefaultValue": "4444" } },
+      { "FuncUsername": { "Type": "String", "Required": true } },
+      { "FuncPassword": { "Type": "Secret", "Required": true } },
+      { "UseAPIToken": { "Type": "boolean", "Required": false, "DefaultValue": false } },
+      { "SkipServerCertValidation": { "Type": "boolean", "Required": false, "DefaultValue": true } }
+    ],
+    "Do": [
+      { "BaseAddress": { "Address": "https://%Address%:%APIPort%" } },
+      { "NewHttpRequest": { "ObjectName": "DiscoverRequest" } },
+      { "Condition": {
+          "If": "UseAPIToken",
+          "Then": {
+            "Do": [
+              { "HttpAuth": { "RequestObjectName": "DiscoverRequest", "Type": "Basic", "Credentials": { "Login": "token", "Password": "%FuncPassword%" } } }
+            ]
+          },
+          "Else": {
+            "Do": [
+              { "HttpAuth": { "RequestObjectName": "DiscoverRequest", "Type": "Basic", "Credentials": { "Login": "%FuncUsername%", "Password": "%FuncPassword%" } } }
+            ]
+          }
+        }
+      },
+
+      { "Request": {
+          "RequestObjectName": "DiscoverRequest",
+          "ResponseObjectName": "UsersListResponse",
+          "Verb": "GET",
+          "Url": "/api/objects/aaa/user/",
+          "IgnoreServerCertAuthentication": "%{SkipServerCertValidation}%",
+          "Content": {
+            "ContentType": "application/json"
+          }
+        }
+      },
+
+      { "Condition": {
+          "If": "UsersListResponse.StatusCode.ToString() != \"OK\"",
+          "Then": {
+            "Do": [
+              { "Status": { "Type": "Discovering", "Percent": 50, "Message": { "Name": "DiscoverAccountsFailed" } } },
+              { "Return": { "Value": false } }
+            ]
+          }
+        }
+      },
+
+      { "SetItem": { "Name": "UserList", "Value": "" } },
+      { "ExtractJsonObject": { "JsonObjectName": "UsersListResponse", "Name": "UserList" } },
+
+      { "ForEach": {
+          "CollectionName": "UserList",
+          "ElementName": "UserObj",
+          "Body": {
+            "Do": [
+              { "WriteDiscoveredAccount": { "Name": "%{UserObj.name.Value}%" } }
+            ]
+          }
+        }
+      },
+
+      { "Return": { "Value": true } }
+    ]
+  },
+
+  "Functions": [
+    {
+      "Name": "HandleHttpResponse",
+      "Parameters": [
+        { "StatusCode": { "Type": "String", "Required": true } },
+        { "Content": { "Type": "String", "Required": true } },
+        { "Operation": { "Type": "String", "Required": true } }
+      ],
+      "Do": [
+        { "Switch": {
+            "MatchValue": "%{StatusCode}%",
+            "Cases": [
+              { "CaseValue": "(OK)|(NoContent)",
+                "Do": [
+                  { "Return": { "Value": true } }
+                ]
+              },
+              { "CaseValue": "Unauthorized",
+                "Do": [
+                  { "Condition": {
+                      "If": "Operation.Equals(\"CheckPassword\")",
+                      "Then": {
+                        "Do": [
+                          { "Return": { "Value": false } }
+                        ]
+                      },
+                      "Else": {
+                        "Do": [
+                          { "Status": { "Type": "Checking", "Percent": 80, "Message": { "Name": "FailedToLogin" } } },
+                          { "Throw": { "Value": "Authentication failed for %Operation%" } }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              { "CaseValue": "Forbidden",
+                "Do": [
+                  { "Status": { "Type": "Checking", "Percent": 80, "Message": { "Name": "InsufficientPrivilegesAccessPassword" } } },
+                  { "Return": { "Value": false } }
+                ]
+              }
+            ],
+            "DefaultCase": {
+              "Do": [
+                { "Status": { "Type": "Checking", "Percent": 80, "Message": { "Name": "UnexpectedResponse" } } },
+                { "Return": { "Value": false } }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
