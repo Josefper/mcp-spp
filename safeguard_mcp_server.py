@@ -669,6 +669,63 @@ def checkin_access_request(request_id: str, appliance_url: str = "") -> str:
 
 
 # ===================================================================
+# TOOL: create_user
+# ===================================================================
+@mcp.tool()
+def create_user(
+    name: str,
+    password: str,
+    first_name: str = "",
+    last_name: str = "",
+    description: str = "",
+    email: str = "",
+    auth_provider_name: str = "Local",
+    auth_provider_id: int = -1,
+    appliance_url: str = "",
+) -> str:
+    """
+    Create a new local user in Safeguard SPP.
+
+    Args:
+        name:               Login name for the user
+        password:           Initial password
+        first_name:         Optional first name
+        last_name:          Optional last name
+        description:        Optional description
+        email:              Optional email address
+        auth_provider_name: Authentication provider name (default "Local")
+        auth_provider_id:   Authentication provider ID (default -1 for Local)
+        appliance_url:      Appliance base URL
+    """
+    base = _ensure_appliance(appliance_url)
+    token = _get_token(appliance_url)
+    body: dict[str, Any] = {
+        "Name": name,
+        "Password": password,
+        "PrimaryAuthenticationProvider": {
+            "Id": auth_provider_id,
+            "Name": auth_provider_name,
+        },
+    }
+    if first_name:
+        body["FirstName"] = first_name
+    if last_name:
+        body["LastName"] = last_name
+    if description:
+        body["Description"] = description
+    if email:
+        body["EmailAddress"] = email
+
+    with _http_client(base) as client:
+        resp = client.post(
+            f"/service/core/{SPP_API_VERSION}/Users",
+            headers=_headers(token),
+            json=body,
+        )
+        return resp.text
+
+
+# ===================================================================
 # TOOL: list_users
 # ===================================================================
 @mcp.tool()
