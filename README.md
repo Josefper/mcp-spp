@@ -53,7 +53,7 @@ Add to `~/.claude/claude_desktop_config.json`:
   "mcpServers": {
     "safeguard-spp": {
       "command": "python3",
-      "args": ["/path/to/safeguard_mcp_server.py"],
+      "args": ["//path//to//safeguard_mcp_server.py"],
       "env": {
         "SPP_APPLIANCE_URL": "https://your-safeguard-appliance",
         "SPP_VERIFY_SSL": "false"
