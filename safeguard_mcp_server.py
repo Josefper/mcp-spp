@@ -551,6 +551,49 @@ def list_access_requests(
 
 
 # ===================================================================
+# TOOL: list_access_request_history
+# ===================================================================
+@mcp.tool()
+def list_access_request_history(
+    filter: str = "",
+    page: int = 0,
+    page_size: int = 50,
+    appliance_url: str = "",
+) -> str:
+    """
+    List historical access requests from the audit log, including those
+    already in terminal states (Complete, Denied, Canceled, Expired).
+
+    Unlike `list_access_requests`, which only shows requests still tracked
+    in the live workflow, this hits /AuditLog/AccessRequests/Requests and
+    returns the full history retained by Safeguard. Field names differ from
+    the live endpoint — e.g. RequestId, RequestState, SubmittedAt,
+    RequestExpiresAt, RequesterName, PasswordResetAt.
+
+    Args:
+        filter:        OData filter (e.g. "AccountId eq 114",
+                       "RequesterName eq 'sglocaladmin'",
+                       "SubmittedAt gt '2026-01-01'")
+        page:          Page number
+        page_size:     Results per page (max enforced by appliance)
+        appliance_url: Appliance base URL
+    """
+    base = _ensure_appliance(appliance_url)
+    token = _get_token(appliance_url)
+    params: dict[str, Any] = {"page": page, "limit": page_size}
+    if filter:
+        params["filter"] = filter
+
+    with _http_client(base) as client:
+        resp = client.get(
+            f"/service/core/{SPP_API_VERSION}/AuditLog/AccessRequests/Requests",
+            headers=_headers(token),
+            params=params,
+        )
+        return resp.text
+
+
+# ===================================================================
 # TOOL: create_access_request
 # ===================================================================
 @mcp.tool()
@@ -558,6 +601,7 @@ def create_access_request(
     account_id: int,
     access_request_type: str = "Password",
     reason: str = "",
+    asset_id: int = 0,
     appliance_url: str = "",
 ) -> str:
     """
@@ -568,20 +612,41 @@ def create_access_request(
 
     Args:
         account_id:          The account to request access for
-        access_request_type: "Password", "SSH", or "RemoteDesktop"
+        access_request_type: "Password", "Ssh", or "RemoteDesktop"
         reason:              Business justification
+        asset_id:            Parent asset (system) the account belongs to.
+                             Optional — looked up from the account if omitted.
         appliance_url:       Appliance base URL
     """
     base = _ensure_appliance(appliance_url)
     token = _get_token(appliance_url)
-    body: dict[str, Any] = {
-        "AccountId": account_id,
-        "AccessRequestType": access_request_type,
-    }
-    if reason:
-        body["ReasonComment"] = reason
 
     with _http_client(base) as client:
+        # SPP requires AssetId on the AccessRequest body; the live endpoint
+        # does not derive it from AccountId. Resolve it if the caller didn't
+        # supply one.
+        if not asset_id:
+            acct_resp = client.get(
+                f"/service/core/{SPP_API_VERSION}/AssetAccounts/{account_id}",
+                headers=_headers(token),
+            )
+            if acct_resp.status_code != 200:
+                return acct_resp.text
+            asset_id = acct_resp.json().get("AssetId") or 0
+            if not asset_id:
+                return json.dumps({
+                    "error": "Could not resolve AssetId from account",
+                    "account_id": account_id,
+                })
+
+        body: dict[str, Any] = {
+            "AccountId": account_id,
+            "AssetId": asset_id,
+            "AccessRequestType": access_request_type,
+        }
+        if reason:
+            body["ReasonComment"] = reason
+
         resp = client.post(
             f"/service/core/{SPP_API_VERSION}/AccessRequests",
             headers=_headers(token),
