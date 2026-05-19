@@ -632,7 +632,8 @@ def create_access_request(
             )
             if acct_resp.status_code != 200:
                 return acct_resp.text
-            asset_id = acct_resp.json().get("AssetId") or 0
+            acct = acct_resp.json()
+            asset_id = (acct.get("Asset") or {}).get("Id") or acct.get("AssetId") or 0
             if not asset_id:
                 return json.dumps({
                     "error": "Could not resolve AssetId from account",
